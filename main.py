@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 import uvicorn
 
 app = FastAPI()
@@ -13,25 +13,38 @@ async def get_redfin_estimate(address: str = Query(...)):
             context = await browser.new_context()
             page = await context.new_page()
 
-            # Step 1: Go to Redfin homepage
+            # Go to Redfin homepage
             await page.goto("https://www.redfin.com", timeout=20000)
-            await page.wait_for_selector("input#search-box-input", timeout=10000)
+            try:
+                await page.wait_for_selector("input#search-box-input", timeout=10000)
+            except PlaywrightTimeout:
+                # Try accepting cookies if the banner is present
+                try:
+                    accept_btn = await page.query_selector("button[aria-label='Accept Cookies']")
+                    if accept_btn:
+                        await accept_btn.click()
+                        await page.wait_for_selector("input#search-box-input", timeout=10000)
+                    else:
+                        raise
+                except:
+                    await browser.close()
+                    return JSONResponse(
+                        content={"error": "Redfin search input not found. Possibly bot-blocked or redirected."},
+                        status_code=500
+                    )
 
-            # Step 2: Type the address and submit
+            # Fill in the address and search
             await page.fill("input#search-box-input", address)
             await page.keyboard.press("Enter")
 
-            # Step 3: Wait for redirect and listing to load
+            # Wait for results page to load and extract the estimate
             await page.wait_for_load_state("networkidle")
-            await page.wait_for_selector('[data-rf-test-id="avmEstimate"]', timeout=10000)
-
-            # Step 4: Extract the estimate
+            await page.wait_for_selector('[data-rf-test-id="avmEstimate"]', timeout=15000)
             estimate_elem = await page.query_selector('[data-rf-test-id="avmEstimate"]')
             estimate_text = await estimate_elem.inner_text()
             current_url = page.url
 
             await browser.close()
-
             return {
                 "address": address,
                 "redfin_estimate": estimate_text,
