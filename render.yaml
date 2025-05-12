@@ -1,0 +1,5 @@
+services:
+  - type: web
+    name: redfin-docker
+    env: docker
+    plan: free
